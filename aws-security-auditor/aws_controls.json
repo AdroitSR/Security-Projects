@@ -1,0 +1,114 @@
+{
+  "metadata": {
+    "version": "1.0",
+    "frameworks": ["CIS AWS Foundations v1.4", "SOC2"],
+    "last_updated": "2025-01-07"
+  },
+  "controls": [
+    {
+      "id": "CIS-1.4",
+      "framework": "CIS",
+      "name": "Ensure no root account access key exists",
+      "description": "The root account should not have access keys",
+      "check_type": "iam_root_access_keys",
+      "severity": "CRITICAL",
+      "remediation": "Delete root account access keys via AWS Console",
+      "remediation_code": "# Manual: AWS Console > IAM > Security Credentials"
+    },
+    {
+      "id": "CIS-1.5",
+      "framework": "CIS",
+      "name": "Ensure MFA is enabled for root account",
+      "description": "Root account must have MFA enabled",
+      "check_type": "iam_root_mfa",
+      "severity": "CRITICAL",
+      "remediation": "Enable MFA for root account",
+      "remediation_code": "# Manual: AWS Console > IAM > Security Credentials > MFA"
+    },
+    {
+      "id": "CIS-1.10",
+      "framework": "CIS",
+      "name": "Ensure multi-factor authentication (MFA) is enabled for all IAM users",
+      "description": "All IAM users with console access should have MFA",
+      "check_type": "iam_mfa_enabled",
+      "severity": "HIGH",
+      "remediation": "Enable MFA for user: {username}",
+      "remediation_code": "resource \"aws_iam_user_login_profile\" \"{username}_mfa\" {\n  user = \"{username}\"\n  pgp_key = \"keybase:username\"\n}"
+    },
+    {
+      "id": "CIS-1.12",
+      "framework": "CIS",
+      "name": "Ensure credentials unused for 90 days or greater are disabled",
+      "description": "IAM credentials not used in 90 days should be deactivated",
+      "check_type": "iam_unused_credentials",
+      "expected_value": 90,
+      "severity": "MEDIUM",
+      "remediation": "Disable or delete unused credentials",
+      "remediation_code": "aws iam delete-access-key --user-name {username} --access-key-id {key_id}"
+    },
+    {
+      "id": "CIS-2.1.1",
+      "framework": "CIS",
+      "name": "Ensure S3 Bucket Policy is set to deny HTTP requests",
+      "description": "S3 buckets should enforce HTTPS (TLS)",
+      "check_type": "s3_enforce_ssl",
+      "severity": "MEDIUM",
+      "remediation": "Add bucket policy to deny non-SSL requests",
+      "remediation_code": "resource \"aws_s3_bucket_policy\" \"{bucket}_ssl\" {\n  bucket = \"{bucket}\"\n  policy = jsonencode({\n    Statement = [{\n      Effect = \"Deny\"\n      Principal = \"*\"\n      Action = \"s3:*\"\n      Resource = \"arn:aws:s3:::{bucket}/*\"\n      Condition = {\n        Bool = { \"aws:SecureTransport\" = \"false\" }\n      }\n    }]\n  })\n}"
+    },
+    {
+      "id": "CIS-2.1.5",
+      "framework": "CIS",
+      "name": "Ensure that S3 Buckets are configured with 'Block public access'",
+      "description": "S3 buckets should block public access",
+      "check_type": "s3_bucket_public",
+      "severity": "HIGH",
+      "remediation": "Enable S3 Block Public Access for bucket: {bucket}",
+      "remediation_code": "resource \"aws_s3_bucket_public_access_block\" \"{bucket}_block\" {\n  bucket = \"{bucket}\"\n  block_public_acls = true\n  block_public_policy = true\n  ignore_public_acls = true\n  restrict_public_buckets = true\n}"
+    },
+    {
+      "id": "CIS-3.1",
+      "framework": "CIS",
+      "name": "Ensure CloudTrail is enabled in all regions",
+      "description": "CloudTrail multi-region trail should be enabled",
+      "check_type": "cloudtrail_enabled",
+      "expected_value": true,
+      "severity": "HIGH",
+      "remediation": "Enable CloudTrail in all regions",
+      "remediation_code": "resource \"aws_cloudtrail\" \"main\" {\n  name = \"main-trail\"\n  s3_bucket_name = aws_s3_bucket.cloudtrail.id\n  is_multi_region_trail = true\n  enable_logging = true\n}"
+    },
+    {
+      "id": "CIS-4.1",
+      "framework": "CIS",
+      "name": "Ensure no security groups allow ingress from 0.0.0.0/0 to port 22",
+      "description": "SSH should not be open to the internet",
+      "check_type": "ec2_security_group",
+      "port": 22,
+      "cidr": "0.0.0.0/0",
+      "severity": "CRITICAL",
+      "remediation": "Remove 0.0.0.0/0 from security group {sg_id} on port 22",
+      "remediation_code": "# Remove with: aws ec2 revoke-security-group-ingress --group-id {sg_id} --protocol tcp --port 22 --cidr 0.0.0.0/0"
+    },
+    {
+      "id": "SOC2-CC6.1",
+      "framework": "SOC2",
+      "name": "Logical Access Controls - MFA Required",
+      "description": "All users must have MFA enabled (SOC2 requirement)",
+      "check_type": "iam_mfa_enabled",
+      "severity": "CRITICAL",
+      "remediation": "Enable MFA for user: {username}",
+      "remediation_code": "# See CIS-1.10"
+    },
+    {
+      "id": "SOC2-CC7.2",
+      "framework": "SOC2",
+      "name": "System Monitoring - CloudTrail Enabled",
+      "description": "Audit logging must be enabled (SOC2 requirement)",
+      "check_type": "cloudtrail_enabled",
+      "expected_value": true,
+      "severity": "HIGH",
+      "remediation": "Enable CloudTrail logging",
+      "remediation_code": "# See CIS-3.1"
+    }
+  ]
+}

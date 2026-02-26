@@ -1,0 +1,11 @@
+control_id,framework,control_name,status,resource_id,resource_type,finding,severity,timestamp
+CIS-1.4,CIS,Ensure no root account access key exists,FAIL,arn:aws:iam::704555300897:root,Root Account,Root access keys: EXIST (delete them!),CRITICAL,2026-02-20T00:30:08Z
+CIS-1.5,CIS,Ensure MFA is enabled for root account,PASS,arn:aws:iam::704555300897:root,Root Account,Root MFA: Enabled,CRITICAL,2026-02-20T00:30:09Z
+CIS-1.10,CIS,Ensure multi-factor authentication (MFA) is enabled for all IAM users,ERROR,N/A,N/A,Error: unexpected '{' in field name,HIGH,2026-02-20T00:30:09Z
+CIS-1.12,CIS,Ensure credentials unused for 90 days or greater are disabled,PASS,arn:aws:iam::704555300897:user/aws-security-auditor,IAM Access Key,Key SMXEUM: Last used 0 days ago,MEDIUM,2026-02-20T00:30:10Z
+CIS-2.1.1,CIS,Ensure S3 Bucket Policy is set to deny HTTP requests,ERROR,N/A,N/A,Error: No S3 buckets to check,MEDIUM,2026-02-20T00:30:11Z
+CIS-2.1.5,CIS,Ensure that S3 Buckets are configured with 'Block public access',ERROR,N/A,N/A,Error: No S3 buckets to check,HIGH,2026-02-20T00:30:12Z
+CIS-3.1,CIS,Ensure CloudTrail is enabled in all regions,PASS,arn:aws:cloudtrail:us-east-1:704555300897:trail/all-regions-trail,CloudTrail,"Logging: True, Multi-region: True",HIGH,2026-02-20T00:30:13Z
+CIS-4.1,CIS,Ensure no security groups allow ingress from 0.0.0.0/0 to port 22,FAIL,arn:aws:ec2:us-east-1:704555300897:security-group/sg-0d030ad815b274e01,Security Group,Allows 0.0.0.0/0 on port 22 (security risk),CRITICAL,2026-02-20T00:30:13Z
+SOC2-CC6.1,SOC2,Logical Access Controls - MFA Required,FAIL,arn:aws:iam::704555300897:user/aws-security-auditor,IAM User,MFA NOT enabled,CRITICAL,2026-02-20T00:30:14Z
+SOC2-CC7.2,SOC2,System Monitoring - CloudTrail Enabled,PASS,arn:aws:cloudtrail:us-east-1:704555300897:trail/all-regions-trail,CloudTrail,"Logging: True, Multi-region: True",HIGH,2026-02-20T00:30:14Z
