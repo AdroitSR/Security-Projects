@@ -10,7 +10,7 @@ import boto3
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from moto import mock_iam, mock_s3, mock_cloudtrail, mock_ec2, mock_sts
+from moto import mock_aws  # ← Updated: single import replaces all individual mocks
 
 # Import the main module
 import sys
@@ -109,7 +109,7 @@ def mock_aws_credentials():
 @pytest.fixture
 def auditor(sample_controls_file, mock_aws_credentials):
     """Create an auditor instance with test controls"""
-    with mock_sts():
+    with mock_aws():
         sts = boto3.client('sts', region_name='us-east-1')
         sts.get_caller_identity = MagicMock(return_value={'Account': '123456789012'})
 
@@ -177,7 +177,7 @@ class TestAWSAuditResult:
 class TestAuditorInitialization:
     """Test auditor initialization"""
 
-    @mock_sts
+    @mock_aws  # ← Updated
     def test_auditor_initialization(self, sample_controls_file, mock_aws_credentials):
         """Test auditor initialization"""
         auditor = AWSSecurityAuditor(str(sample_controls_file))
@@ -197,7 +197,7 @@ class TestAuditorInitialization:
 
     def test_load_controls_file_not_found(self, mock_aws_credentials):
         """Test loading controls with non-existent file"""
-        with mock_sts():
+        with mock_aws():  # ← Updated
             auditor = AWSSecurityAuditor("nonexistent.json")
             with pytest.raises(FileNotFoundError):
                 auditor.load_controls()
@@ -208,7 +208,7 @@ class TestAuditorInitialization:
         with open(invalid_file, 'w') as f:
             f.write("{ invalid json }")
 
-        with mock_sts():
+        with mock_aws():  # ← Updated
             auditor = AWSSecurityAuditor(str(invalid_file))
             with pytest.raises(json.JSONDecodeError):
                 auditor.load_controls()
@@ -221,10 +221,9 @@ class TestAuditorInitialization:
 class TestIAMPasswordPolicy:
     """Test IAM password policy checks"""
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_password_policy_exists_and_compliant(self, auditor):
         """Test password policy check when policy exists and is compliant"""
-        # Create IAM client and set password policy
         iam = boto3.client('iam', region_name='us-east-1')
         iam.update_account_password_policy(
             MinimumPasswordLength=14,
@@ -245,7 +244,7 @@ class TestIAMPasswordPolicy:
         assert results[0].control_id == 'TEST-IAM-1'
         assert '14' in results[0].finding
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_password_policy_exists_but_weak(self, auditor):
         """Test password policy check when policy is too weak"""
         iam = boto3.client('iam', region_name='us-east-1')
@@ -261,7 +260,7 @@ class TestIAMPasswordPolicy:
         assert results[0].status == 'FAIL'
         assert '8' in results[0].finding
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_password_policy_not_configured(self, auditor):
         """Test password policy check when no policy exists"""
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -282,15 +281,12 @@ class TestIAMPasswordPolicy:
 class TestIAMMFA:
     """Test IAM MFA checks"""
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_user_with_mfa_enabled(self, auditor):
         """Test MFA check for user with MFA enabled"""
         iam = boto3.client('iam', region_name='us-east-1')
 
-        # Create user
         iam.create_user(UserName='test-user')
-
-        # Enable virtual MFA device
         iam.enable_mfa_device(
             UserName='test-user',
             SerialNumber='arn:aws:iam::123456789012:mfa/test-user',
@@ -309,7 +305,7 @@ class TestIAMMFA:
         assert 'test-user' in results[0].resource_id
         assert 'enabled' in results[0].finding.lower()
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_user_without_mfa(self, auditor):
         """Test MFA check for user without MFA"""
         iam = boto3.client('iam', region_name='us-east-1')
@@ -326,12 +322,11 @@ class TestIAMMFA:
         assert 'test-user-no-mfa' in results[0].resource_id
         assert 'NOT enabled' in results[0].finding
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_multiple_users_mixed_mfa(self, auditor):
         """Test MFA check with multiple users, some with MFA"""
         iam = boto3.client('iam', region_name='us-east-1')
 
-        # User with MFA
         iam.create_user(UserName='user-with-mfa')
         iam.enable_mfa_device(
             UserName='user-with-mfa',
@@ -340,7 +335,6 @@ class TestIAMMFA:
             AuthenticationCode2='654321'
         )
 
-        # User without MFA
         iam.create_user(UserName='user-without-mfa')
 
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -351,11 +345,9 @@ class TestIAMMFA:
 
         assert len(results) == 2
 
-        # Check first user (with MFA)
         user_with_mfa_result = [r for r in results if 'user-with-mfa' in r.resource_id][0]
         assert user_with_mfa_result.status == 'PASS'
 
-        # Check second user (without MFA)
         user_without_mfa_result = [r for r in results if 'user-without-mfa' in r.resource_id][0]
         assert user_without_mfa_result.status == 'FAIL'
 
@@ -367,15 +359,12 @@ class TestIAMMFA:
 class TestS3PublicAccess:
     """Test S3 public access checks"""
 
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_bucket_with_public_access_blocked(self, auditor):
         """Test S3 check when public access is blocked"""
         s3 = boto3.client('s3', region_name='us-east-1')
 
-        # Create bucket
         s3.create_bucket(Bucket='test-secure-bucket')
-
-        # Set public access block
         s3.put_public_access_block(
             Bucket='test-secure-bucket',
             PublicAccessBlockConfiguration={
@@ -397,13 +386,11 @@ class TestS3PublicAccess:
         assert 'test-secure-bucket' in results[0].resource_id
         assert 'blocked' in results[0].finding.lower()
 
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_bucket_without_public_access_block(self, auditor):
         """Test S3 check when public access is NOT blocked"""
         s3 = boto3.client('s3', region_name='us-east-1')
         s3.create_bucket(Bucket='test-insecure-bucket')
-
-        # Don't set public access block
 
         auditor.session = boto3.Session(region_name='us-east-1')
         auditor.load_controls()
@@ -415,12 +402,11 @@ class TestS3PublicAccess:
         assert results[0].status == 'FAIL'
         assert 'test-insecure-bucket' in results[0].resource_id
 
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_multiple_buckets_mixed_configuration(self, auditor):
         """Test S3 check with multiple buckets"""
         s3 = boto3.client('s3', region_name='us-east-1')
 
-        # Secure bucket
         s3.create_bucket(Bucket='secure-bucket')
         s3.put_public_access_block(
             Bucket='secure-bucket',
@@ -432,7 +418,6 @@ class TestS3PublicAccess:
             }
         )
 
-        # Insecure bucket
         s3.create_bucket(Bucket='insecure-bucket')
 
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -457,15 +442,12 @@ class TestS3PublicAccess:
 class TestCloudTrail:
     """Test CloudTrail checks"""
 
-    @mock_cloudtrail
-    @mock_s3
+    @mock_aws  # ← Updated (replaces @mock_cloudtrail + @mock_s3)
     def test_cloudtrail_enabled_and_logging(self, auditor):
         """Test CloudTrail check when trail exists and is logging"""
-        # Create S3 bucket for CloudTrail
         s3 = boto3.client('s3', region_name='us-east-1')
         s3.create_bucket(Bucket='cloudtrail-logs')
 
-        # Create CloudTrail
         cloudtrail = boto3.client('cloudtrail', region_name='us-east-1')
         cloudtrail.create_trail(
             Name='test-trail',
@@ -481,10 +463,9 @@ class TestCloudTrail:
         results = auditor.check_cloudtrail(control)
 
         assert len(results) >= 1
-        # At least one trail should be logging
         assert any(r.status == 'PASS' for r in results)
 
-    @mock_cloudtrail
+    @mock_aws  # ← Updated
     def test_cloudtrail_not_configured(self, auditor):
         """Test CloudTrail check when no trail exists"""
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -493,7 +474,6 @@ class TestCloudTrail:
         control = auditor.controls[3]
         results = auditor.check_cloudtrail(control)
 
-        # Should return FAIL when no trails exist
         assert len(results) >= 1
         assert any(r.status == 'FAIL' for r in results)
 
@@ -505,12 +485,11 @@ class TestCloudTrail:
 class TestSecurityGroups:
     """Test EC2 security group checks"""
 
-    @mock_ec2
+    @mock_aws  # ← Updated
     def test_security_group_with_open_ssh(self, auditor):
         """Test security group with 0.0.0.0/0 on port 22"""
         ec2 = boto3.client('ec2', region_name='us-east-1')
 
-        # Create VPC and security group
         vpc = ec2.create_vpc(CidrBlock='10.0.0.0/16')
         vpc_id = vpc['Vpc']['VpcId']
 
@@ -521,7 +500,6 @@ class TestSecurityGroups:
         )
         sg_id = sg['GroupId']
 
-        # Add rule allowing 0.0.0.0/0 on port 22
         ec2.authorize_security_group_ingress(
             GroupId=sg_id,
             IpPermissions=[{
@@ -543,7 +521,7 @@ class TestSecurityGroups:
         assert sg_result.status == 'FAIL'
         assert '22' in sg_result.finding
 
-    @mock_ec2
+    @mock_aws  # ← Updated
     def test_security_group_restricted_ssh(self, auditor):
         """Test security group with restricted SSH access"""
         ec2 = boto3.client('ec2', region_name='us-east-1')
@@ -558,7 +536,6 @@ class TestSecurityGroups:
         )
         sg_id = sg['GroupId']
 
-        # Add rule with specific IP
         ec2.authorize_security_group_ingress(
             GroupId=sg_id,
             IpPermissions=[{
@@ -575,7 +552,6 @@ class TestSecurityGroups:
         control = auditor.controls[4]
         results = auditor.check_security_groups(control)
 
-        # Should PASS because it's not 0.0.0.0/0
         sg_result = [r for r in results if sg_id in r.resource_id]
         if sg_result:
             assert sg_result[0].status == 'PASS'
@@ -588,13 +564,9 @@ class TestSecurityGroups:
 class TestIntegration:
     """Integration tests for full audit workflow"""
 
-    @mock_iam
-    @mock_s3
-    @mock_cloudtrail
-    @mock_ec2
+    @mock_aws  # ← Updated (replaces all 4 individual decorators)
     def test_full_audit_workflow(self, auditor):
         """Test complete audit workflow"""
-        # Setup AWS resources
         iam = boto3.client('iam', region_name='us-east-1')
         iam.create_user(UserName='test-user')
 
@@ -605,20 +577,16 @@ class TestIntegration:
         auditor.load_controls()
         auditor.run_audit()
 
-        # Verify results
         assert len(auditor.results) > 0
         assert all(isinstance(r, AWSAuditResult) for r in auditor.results)
 
-        # Check that we have results for different check types
         control_ids = [r.control_id for r in auditor.results]
         assert 'TEST-IAM-1' in control_ids or 'TEST-IAM-2' in control_ids
         assert 'TEST-S3-1' in control_ids
 
-    @mock_iam
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_generate_json_report(self, auditor, tmp_path):
         """Test generating JSON report"""
-        # Setup and run audit
         iam = boto3.client('iam', region_name='us-east-1')
         iam.create_user(UserName='test-user')
 
@@ -626,13 +594,11 @@ class TestIntegration:
         auditor.load_controls()
         auditor.run_audit()
 
-        # Generate report
         report_file = tmp_path / "test_report.json"
         auditor.generate_json_report(str(report_file))
 
         assert report_file.exists()
 
-        # Validate report structure
         with open(report_file) as f:
             report = json.load(f)
 
@@ -641,8 +607,7 @@ class TestIntegration:
         assert 'aws_account_id' in report['audit_metadata']
         assert report['audit_metadata']['total_checks'] > 0
 
-    @mock_iam
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_generate_csv_report(self, auditor, tmp_path):
         """Test generating CSV report"""
         iam = boto3.client('iam', region_name='us-east-1')
@@ -662,10 +627,9 @@ class TestIntegration:
         assert 'status' in content
         assert 'severity' in content
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_generate_terraform_remediation(self, auditor, tmp_path):
         """Test generating Terraform remediation code"""
-        # Create user without MFA (will fail MFA check)
         iam = boto3.client('iam', region_name='us-east-1')
         iam.create_user(UserName='test-user-no-mfa')
 
@@ -676,7 +640,6 @@ class TestIntegration:
         remediation_file = tmp_path / "remediation.tf"
         auditor.generate_terraform_remediation(str(remediation_file))
 
-        # Only generated if there are failures
         if any(r.status == 'FAIL' for r in auditor.results):
             assert remediation_file.exists()
             content = remediation_file.read_text()
@@ -709,13 +672,12 @@ class TestErrorHandling:
         assert results[0].status == 'ERROR'
         assert 'Unknown check type' in results[0].finding
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_iam_check_with_api_error(self, auditor):
         """Test IAM check when API call fails"""
         auditor.session = boto3.Session(region_name='us-east-1')
         auditor.load_controls()
 
-        # Patch boto3 to raise exception
         with patch.object(auditor.session, 'client') as mock_client:
             mock_iam = MagicMock()
             mock_iam.get_account_password_policy.side_effect = Exception("API Error")
@@ -731,7 +693,6 @@ class TestErrorHandling:
         """Test that audit continues when individual checks fail"""
         auditor.load_controls()
 
-        # Mock execute_check to fail on first control
         original_execute = auditor.execute_check
         call_count = [0]
 
@@ -744,7 +705,6 @@ class TestErrorHandling:
         with patch.object(auditor, 'execute_check', side_effect=mock_execute):
             auditor.run_audit()
 
-        # Should have tried all controls despite first failure
         assert call_count[0] == len(auditor.controls)
 
 
@@ -803,7 +763,7 @@ class TestHelperMethods:
 class TestEdgeCases:
     """Test edge cases"""
 
-    @mock_iam
+    @mock_aws  # ← Updated
     def test_no_iam_users_exist(self, auditor):
         """Test MFA check when no IAM users exist"""
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -812,10 +772,9 @@ class TestEdgeCases:
         control = auditor.controls[1]
         results = auditor.check_iam_mfa(control)
 
-        # Should return empty list or handle gracefully
         assert isinstance(results, list)
 
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_no_s3_buckets_exist(self, auditor):
         """Test S3 check when no buckets exist"""
         auditor.session = boto3.Session(region_name='us-east-1')
@@ -834,7 +793,7 @@ class TestEdgeCases:
         with open(controls_file, 'w') as f:
             json.dump(empty_controls, f)
 
-        with mock_sts():
+        with mock_aws():  # ← Updated
             auditor = AWSSecurityAuditor(str(controls_file))
             auditor.load_controls()
             auditor.run_audit()
@@ -849,13 +808,11 @@ class TestEdgeCases:
 class TestPerformance:
     """Test performance characteristics"""
 
-    @mock_iam
-    @mock_s3
+    @mock_aws  # ← Updated
     def test_audit_completes_in_reasonable_time(self, auditor):
         """Test that audit completes in reasonable time"""
         import time
 
-        # Setup multiple resources
         iam = boto3.client('iam', region_name='us-east-1')
         for i in range(5):
             iam.create_user(UserName=f'user-{i}')
@@ -871,7 +828,6 @@ class TestPerformance:
         auditor.run_audit()
         end_time = time.time()
 
-        # Should complete in under 30 seconds for 5 controls
         assert (end_time - start_time) < 30
 
 

@@ -6,6 +6,7 @@ Supports: CIS AWS Foundations, SOC1, SOC2
 
 import json
 import boto3
+from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Any
@@ -42,14 +43,11 @@ class AWSAuditResult:
 
 
 class AWSSecurityAuditor:
-    """Main auditor class for AWS compliance checks"""
-
     def __init__(self, controls_file: str, aws_profile: str = None):
         self.controls_file = Path(controls_file)
         self.controls = []
         self.results: List[AWSAuditResult] = []
 
-        # Initialize AWS session
         session_kwargs = {}
         if aws_profile:
             session_kwargs['profile_name'] = aws_profile
@@ -64,7 +62,6 @@ class AWSSecurityAuditor:
             raise
 
     def load_controls(self) -> None:
-        """Load control specifications from JSON"""
         try:
             with open(self.controls_file) as f:
                 data = json.load(f)
@@ -78,7 +75,6 @@ class AWSSecurityAuditor:
             raise
 
     def execute_check(self, control: Dict) -> List[AWSAuditResult]:
-        """Execute AWS API-based check"""
         check_type = control.get('check_type')
 
         if check_type == 'iam_password_policy':
@@ -112,7 +108,6 @@ class AWSSecurityAuditor:
 
             min_length = policy.get('MinimumPasswordLength', 0)
             expected_length = control.get('expected_value', 14)
-
             passed = min_length >= expected_length
 
             return [AWSAuditResult(
@@ -130,36 +125,29 @@ class AWSSecurityAuditor:
                 remediation_code=control.get('remediation_code', '')
             )]
 
-        except iam.exceptions.NoSuchEntityException:
-            return [self.create_fail_result(
-                control,
-                "N/A",
-                "IAM Password Policy",
-                "No password policy configured"
-            )]
+        # FIX: Use ClientError instead of iam.exceptions.NoSuchEntityException
+        # (the latter fails when iam is a MagicMock in tests)
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchEntity':
+                return [self.create_fail_result(
+                    control, "N/A", "IAM Password Policy", "No password policy configured"
+                )]
+            return [self.create_error_result(control, str(e))]
         except Exception as e:
             return [self.create_error_result(control, str(e))]
 
     def check_iam_mfa(self, control: Dict) -> List[AWSAuditResult]:
-        """Check if IAM users have MFA enabled"""
         results = []
-
         try:
             iam = self.session.client('iam')
             users = iam.list_users()['Users']
 
             if not users:
-                return [self.create_fail_result(
-                    control,
-                    "N/A",
-                    "IAM Users",
-                    "No IAM users found"
-                )]
+                return [self.create_fail_result(control, "N/A", "IAM Users", "No IAM users found")]
 
             for user in users:
                 username = user['UserName']
                 mfa_devices = iam.list_mfa_devices(UserName=username)['MFADevices']
-
                 passed = len(mfa_devices) > 0
 
                 results.append(AWSAuditResult(
@@ -173,8 +161,8 @@ class AWSSecurityAuditor:
                     finding=f"MFA {'enabled' if passed else 'NOT enabled'}",
                     severity=control['severity'],
                     timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    remediation=control.get('remediation', '').format(username=username),
-                    remediation_code=control.get('remediation_code', '').format(username=username)
+                    remediation=self.safe_format(control.get('remediation', ''), username=username),
+                    remediation_code=self.safe_format(control.get('remediation_code', ''), username=username)
                 ))
 
             return results
@@ -183,11 +171,9 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_iam_root_access_keys(self, control: Dict) -> List[AWSAuditResult]:
-        """Check if root account has access keys"""
         try:
             iam = self.session.client('iam')
             summary = iam.get_account_summary()['SummaryMap']
-
             root_keys = summary.get('AccountAccessKeysPresent', 0)
             passed = root_keys == 0
 
@@ -210,11 +196,9 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_iam_root_mfa(self, control: Dict) -> List[AWSAuditResult]:
-        """Check if root account has MFA enabled"""
         try:
             iam = self.session.client('iam')
             summary = iam.get_account_summary()['SummaryMap']
-
             root_mfa = summary.get('AccountMFAEnabled', 0)
             passed = root_mfa == 1
 
@@ -237,7 +221,6 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_iam_unused_credentials(self, control: Dict) -> List[AWSAuditResult]:
-        """Check for unused IAM credentials"""
         results = []
         max_age_days = control.get('expected_value', 90)
 
@@ -248,15 +231,12 @@ class AWSSecurityAuditor:
             for user in users:
                 username = user['UserName']
 
-                # Check password last used
                 try:
-                    login_profile = iam.get_login_profile(UserName=username)
-                    # If password exists but never used, report it
-                    # This is a simplified check
-                except iam.exceptions.NoSuchEntityException:
-                    pass
+                    iam.get_login_profile(UserName=username)
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'NoSuchEntity':
+                        pass
 
-                # Check access keys
                 access_keys = iam.list_access_keys(UserName=username)['AccessKeyMetadata']
 
                 for key in access_keys:
@@ -264,16 +244,10 @@ class AWSSecurityAuditor:
                     created = key['CreateDate']
                     age_days = (datetime.now(timezone.utc) - created).days
 
-                    # Get last used info
                     try:
                         last_used = iam.get_access_key_last_used(AccessKeyId=key_id)
                         last_used_date = last_used.get('AccessKeyLastUsed', {}).get('LastUsedDate')
-
-                        if last_used_date:
-                            days_since_use = (datetime.now(timezone.utc) - last_used_date).days
-                        else:
-                            days_since_use = age_days
-
+                        days_since_use = (datetime.now(timezone.utc) - last_used_date).days if last_used_date else age_days
                         passed = days_since_use < max_age_days
 
                         results.append(AWSAuditResult(
@@ -287,8 +261,8 @@ class AWSSecurityAuditor:
                             finding=f"Key {key_id[-6:]}: Last used {days_since_use} days ago",
                             severity=control['severity'],
                             timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                            remediation=control.get('remediation', '').format(username=username, key_id=key_id),
-                            remediation_code=control.get('remediation_code', '').format(username=username, key_id=key_id)
+                            remediation=self.safe_format(control.get('remediation', ''), username=username, key_id=key_id),
+                            remediation_code=self.safe_format(control.get('remediation_code', ''), username=username, key_id=key_id)
                         ))
                     except Exception:
                         pass
@@ -317,10 +291,10 @@ class AWSSecurityAuditor:
                     config = public_block['PublicAccessBlockConfiguration']
 
                     is_blocked = (
-                            config.get('BlockPublicAcls', False) and
-                            config.get('BlockPublicPolicy', False) and
-                            config.get('IgnorePublicAcls', False) and
-                            config.get('RestrictPublicBuckets', False)
+                        config.get('BlockPublicAcls', False) and
+                        config.get('BlockPublicPolicy', False) and
+                        config.get('IgnorePublicAcls', False) and
+                        config.get('RestrictPublicBuckets', False)
                     )
 
                     results.append(AWSAuditResult(
@@ -334,14 +308,15 @@ class AWSSecurityAuditor:
                         finding=f"Public access {'blocked' if is_blocked else 'NOT blocked'}",
                         severity=control['severity'],
                         timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                        remediation=control.get('remediation', '').format(bucket=bucket_name),
-                        remediation_code=control.get('remediation_code', '').format(bucket=bucket_name)
+                        remediation=self.safe_format(control.get('remediation', ''), bucket=bucket_name),
+                        remediation_code=self.safe_format(control.get('remediation_code', ''), bucket=bucket_name)
                     ))
 
-                except Exception as e:
-                    # Catch all S3 exceptions
-                    error_code = e.response['Error']['Code'] if hasattr(e, 'response') else str(e)
-
+                # FIX: Removed the broken try/except/else — the else clause was running
+                # when no exception occurred but referenced undefined variable 'error_code',
+                # causing a NameError that was swallowed by the outer except as ERROR.
+                except ClientError as e:
+                    error_code = e.response['Error']['Code']
                     if error_code == 'NoSuchPublicAccessBlockConfiguration':
                         results.append(self.create_fail_result(
                             control,
@@ -349,8 +324,10 @@ class AWSSecurityAuditor:
                             "S3 Bucket",
                             "No public access block configured"
                         ))
-                else:
-                    logger.warning(f"Could not check bucket {bucket_name}: {error_code}")
+                    else:
+                        logger.warning(f"Could not check bucket {bucket_name}: {error_code}")
+                except Exception as e:
+                    logger.warning(f"Could not check bucket {bucket_name}: {e}")
 
             return results if results else [self.create_error_result(control, "No S3 buckets to check")]
 
@@ -358,7 +335,6 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_s3_enforce_ssl(self, control: Dict) -> List[AWSAuditResult]:
-        """Check if S3 buckets enforce SSL/TLS"""
         results = []
 
         try:
@@ -371,8 +347,6 @@ class AWSSecurityAuditor:
                 try:
                     policy = s3.get_bucket_policy(Bucket=bucket_name)
                     policy_text = policy['Policy']
-
-                    # Check if policy denies non-SSL requests
                     has_ssl_enforcement = 'aws:SecureTransport' in policy_text and 'Deny' in policy_text
 
                     results.append(AWSAuditResult(
@@ -386,13 +360,12 @@ class AWSSecurityAuditor:
                         finding=f"SSL enforcement: {'Yes' if has_ssl_enforcement else 'No'}",
                         severity=control['severity'],
                         timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                        remediation=control.get('remediation', '').format(bucket=bucket_name),
-                        remediation_code=control.get('remediation_code', '').format(bucket=bucket_name)
+                        remediation=self.safe_format(control.get('remediation', ''), bucket=bucket_name),
+                        remediation_code=self.safe_format(control.get('remediation_code', ''), bucket=bucket_name)
                     ))
 
-                except Exception as e:
-                    error_code = e.response['Error']['Code'] if hasattr(e, 'response') else str(e)
-
+                except ClientError as e:
+                    error_code = e.response['Error']['Code']
                     if error_code == 'NoSuchBucketPolicy':
                         results.append(self.create_fail_result(
                             control,
@@ -403,40 +376,28 @@ class AWSSecurityAuditor:
                     else:
                         logger.warning(f"Could not check SSL for bucket {bucket_name}: {error_code}")
 
-                return results if results else [self.create_error_result(control, "No S3 buckets to check")]
+            return results if results else [self.create_error_result(control, "No S3 buckets to check")]
 
         except Exception as e:
             return [self.create_error_result(control, str(e))]
 
     def check_cloudtrail(self, control: Dict) -> List[AWSAuditResult]:
-        """Check CloudTrail configuration"""
         try:
             cloudtrail = self.session.client('cloudtrail')
             trails = cloudtrail.describe_trails()['trailList']
 
             if not trails:
-                return [self.create_fail_result(
-                    control,
-                    "N/A",
-                    "CloudTrail",
-                    "No CloudTrail trails configured"
-                )]
+                return [self.create_fail_result(control, "N/A", "CloudTrail", "No CloudTrail trails configured")]
 
             results = []
-            has_multi_region_trail = False
-
             for trail in trails:
                 trail_name = trail['Name']
                 trail_arn = trail['TrailARN']
                 is_multi_region = trail.get('IsMultiRegionTrail', False)
 
-                # Check if trail is logging
                 try:
                     status = cloudtrail.get_trail_status(Name=trail_name)
                     is_logging = status.get('IsLogging', False)
-
-                    if is_multi_region and is_logging:
-                        has_multi_region_trail = True
 
                     results.append(AWSAuditResult(
                         control_id=control['id'],
@@ -461,7 +422,6 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_security_groups(self, control: Dict) -> List[AWSAuditResult]:
-        """Check EC2 security group rules"""
         results = []
         port = control.get('port', 22)
         cidr = control.get('cidr', '0.0.0.0/0')
@@ -474,14 +434,11 @@ class AWSSecurityAuditor:
                 sg_id = sg['GroupId']
                 sg_name = sg['GroupName']
 
-                # Check inbound rules
                 for permission in sg.get('IpPermissions', []):
                     from_port = permission.get('FromPort')
                     to_port = permission.get('ToPort')
 
-                    # Check if this rule applies to the specified port
                     if from_port and to_port and from_port <= port <= to_port:
-                        # Check IP ranges
                         for ip_range in permission.get('IpRanges', []):
                             if ip_range.get('CidrIp') == cidr:
                                 results.append(AWSAuditResult(
@@ -495,14 +452,10 @@ class AWSSecurityAuditor:
                                     finding=f"Allows {cidr} on port {port} (security risk)",
                                     severity=control['severity'],
                                     timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                                    remediation=control.get('remediation', '').format(sg_id=sg_id),
-                                    remediation_code=control.get('remediation_code', '').format(sg_id=sg_id)
+                                    remediation=self.safe_format(control.get('remediation', ''), sg_id=sg_id),
+                                    remediation_code=self.safe_format(control.get('remediation_code', ''), sg_id=sg_id)
                                 ))
-                            else:
-                                # If this port is open but not to 0.0.0.0/0, it's OK
-                                pass
 
-            # If no results, means no security groups have the risky rule
             if not results:
                 results.append(AWSAuditResult(
                     control_id=control['id'],
@@ -523,9 +476,7 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def check_rds_encryption(self, control: Dict) -> List[AWSAuditResult]:
-        """Check RDS encryption at rest"""
         results = []
-
         try:
             rds = self.session.client('rds')
             instances = rds.describe_db_instances()['DBInstances']
@@ -549,8 +500,8 @@ class AWSSecurityAuditor:
                     finding=f"Encryption: {'Enabled' if encrypted else 'NOT enabled'}",
                     severity=control['severity'],
                     timestamp=datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    remediation=control.get('remediation', '').format(db_id=db_id),
-                    remediation_code=control.get('remediation_code', '').format(db_id=db_id)
+                    remediation=self.safe_format(control.get('remediation', ''), db_id=db_id),
+                    remediation_code=self.safe_format(control.get('remediation_code', ''), db_id=db_id)
                 ))
 
             return results
@@ -559,7 +510,6 @@ class AWSSecurityAuditor:
             return [self.create_error_result(control, str(e))]
 
     def run_audit(self) -> None:
-        """Execute all compliance checks"""
         logger.info("Starting AWS security audit...")
 
         for control in self.controls:
@@ -570,7 +520,6 @@ class AWSSecurityAuditor:
                 findings = self.execute_check(control)
                 self.results.extend(findings)
 
-                # Log summary
                 passed = sum(1 for f in findings if f.status == 'PASS')
                 failed = sum(1 for f in findings if f.status == 'FAIL')
                 logger.info(f"  Result: {passed} passed, {failed} failed")
@@ -580,7 +529,6 @@ class AWSSecurityAuditor:
                 self.results.append(self.create_error_result(control, str(e)))
 
     def generate_json_report(self, output_file: str) -> None:
-        """Generate JSON compliance report"""
         report = {
             "audit_metadata": {
                 "timestamp": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
@@ -604,7 +552,6 @@ class AWSSecurityAuditor:
         logger.info(f"JSON report saved to: {output_file}")
 
     def generate_csv_report(self, output_file: str) -> None:
-        """Generate CSV report"""
         if not self.results:
             logger.warning("No results to write to CSV")
             return
@@ -613,18 +560,14 @@ class AWSSecurityAuditor:
             fieldnames = ['control_id', 'framework', 'control_name', 'status',
                           'resource_id', 'resource_type', 'finding', 'severity', 'timestamp']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
-
             writer.writeheader()
             for result in self.results:
                 row = result.to_dict()
-                # Only write selected fields
-                filtered_row = {k: row[k] for k in fieldnames}
-                writer.writerow(filtered_row)
+                writer.writerow({k: row[k] for k in fieldnames})
 
         logger.info(f"CSV report saved to: {output_file}")
 
     def generate_terraform_remediation(self, output_file: str) -> None:
-        """Generate Terraform code to fix failures"""
         failed = [r for r in self.results if r.status == 'FAIL' and r.remediation_code]
 
         if not failed:
@@ -645,7 +588,6 @@ class AWSSecurityAuditor:
         logger.info(f"Terraform remediation saved to: {output_file}")
 
     def print_summary(self) -> None:
-        """Print audit summary"""
         total = len(self.results)
         passed = sum(1 for r in self.results if r.status == 'PASS')
         failed = sum(1 for r in self.results if r.status == 'FAIL')
@@ -669,8 +611,14 @@ class AWSSecurityAuditor:
                     print(f"    Resource: {result.resource_id}")
         print()
 
+    def safe_format(self, template: str, **kwargs) -> str:
+        """Safely substitute {key} placeholders without breaking Terraform/JSON curly braces.
+        Only replaces exact {key} matches from kwargs, leaves everything else untouched."""
+        for key, value in kwargs.items():
+            template = template.replace('{' + key + '}', str(value))
+        return template
+
     def create_error_result(self, control: Dict, error: str) -> AWSAuditResult:
-        """Helper to create error result"""
         return AWSAuditResult(
             control_id=control['id'],
             framework=control.get('framework', 'UNKNOWN'),
@@ -686,7 +634,6 @@ class AWSSecurityAuditor:
 
     def create_fail_result(self, control: Dict, resource_id: str,
                            resource_type: str, finding: str) -> AWSAuditResult:
-        """Helper to create fail result"""
         return AWSAuditResult(
             control_id=control['id'],
             framework=control.get('framework', 'UNKNOWN'),
@@ -705,39 +652,30 @@ class AWSSecurityAuditor:
 
 def main():
     parser = argparse.ArgumentParser(description='AWS Security Compliance Auditor')
-    parser.add_argument('-c', '--controls', default='aws_controls.json',
-                        help='Path to controls JSON file')
-    parser.add_argument('-o', '--output-dir', default='reports',
-                        help='Output directory for reports')
+    parser.add_argument('-c', '--controls', default='aws_controls.json')
+    parser.add_argument('-o', '--output-dir', default='reports')
     parser.add_argument('--profile', help='AWS profile name')
-    parser.add_argument('--framework', choices=['CIS', 'SOC1', 'SOC2', 'ALL'], default='ALL',
-                        help='Filter by framework')
+    parser.add_argument('--framework', choices=['CIS', 'SOC1', 'SOC2', 'ALL'], default='ALL')
 
     args = parser.parse_args()
 
     try:
-        # Initialize auditor
         auditor = AWSSecurityAuditor(args.controls, args.profile)
         auditor.load_controls()
 
-        # Filter by framework if specified
         if args.framework != 'ALL':
             auditor.controls = [c for c in auditor.controls if c.get('framework') == args.framework]
             logger.info(f"Filtered to {len(auditor.controls)} {args.framework} controls")
 
-        # Run audit
         auditor.run_audit()
 
-        # Generate reports
         Path(args.output_dir).mkdir(exist_ok=True, parents=True)
         auditor.generate_json_report(f"{args.output_dir}/aws_audit_report.json")
         auditor.generate_csv_report(f"{args.output_dir}/aws_audit_report.csv")
         auditor.generate_terraform_remediation(f"{args.output_dir}/remediation.tf")
 
-        # Print summary
         auditor.print_summary()
 
-        # Exit with error code if any checks failed
         failed_count = sum(1 for r in auditor.results if r.status == 'FAIL')
         return 1 if failed_count > 0 else 0
 

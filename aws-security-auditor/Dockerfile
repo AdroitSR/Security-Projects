@@ -16,6 +16,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY aws_auditor.py aws_controls.json ./
+COPY test_aws_auditor.py ./
 
 RUN mkdir -p /app/reports
 
