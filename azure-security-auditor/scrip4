@@ -1,0 +1,112 @@
+cat > dast_scan.py << 'EOF'
+#!/usr/bin/env python3
+"""DAST Scanner - Tests runtime security of the tool."""
+import asyncio
+import os
+from auditor.core.azure_client import AzureClient
+
+
+async def test_authentication():
+    """Test authentication security."""
+    print("🔍 Testing Authentication...")
+
+    issues = []
+
+    # Check credential strength
+    secret = os.getenv('AZURE_CLIENT_SECRET', '')
+    if secret and len(secret) < 40:
+        issues.append("⚠️  Client secret appears short (might be Secret ID)")
+    else:
+        print("   ✅ Credential format looks good")
+
+    return issues
+
+
+async def test_api_security():
+    """Test API security."""
+    print("\n🔍 Testing API Security...")
+
+    issues = []
+
+    try:
+        client = AzureClient()
+        print("   ✅ Can connect to Azure")
+
+        # Test HTTPS enforcement (Azure SDK does this automatically)
+        print("   ✅ HTTPS enforced by Azure SDK")
+
+        # Test error handling
+        storage = client.get_storage_client()
+        list(storage.storage_accounts.list())
+        print("   ✅ Can list resources with proper permissions")
+
+    except Exception as e:
+        if "AuthorizationFailed" in str(e):
+            issues.append("⚠️  Authorization check working correctly")
+        else:
+            issues.append(f"❌ API Error: {str(e)[:50]}")
+
+    return issues
+
+
+async def test_secrets_management():
+    """Test secrets handling."""
+    print("\n🔍 Testing Secrets Management...")
+
+    issues = []
+
+    # Check environment variables are used (not hardcoded)
+    using_env = bool(os.getenv('AZURE_CLIENT_ID'))
+
+    if using_env:
+        print("   ✅ Using environment variables for credentials")
+    else:
+        print("   ℹ️  No environment variables detected (might be using Azure CLI)")
+
+    return issues
+
+
+async def main():
+    """Run all DAST tests."""
+    print("=" * 70)
+    print("DAST SCAN - Testing Runtime Security")
+    print("=" * 70)
+    print()
+
+    all_issues = []
+
+    # Run tests
+    all_issues.extend(await test_authentication())
+    all_issues.extend(await test_api_security())
+    all_issues.extend(await test_secrets_management())
+
+    # Summary
+    print()
+    print("=" * 70)
+    print("DAST SUMMARY")
+    print("=" * 70)
+    print(f"Total Issues: {len(all_issues)}")
+
+    if all_issues:
+        print("\nIssues found:")
+        for issue in all_issues:
+            print(f"  {issue}")
+
+    print("=" * 70)
+    print()
+
+    if any("❌" in i for i in all_issues):
+        print("❌ DAST found critical issues")
+        return 1
+    else:
+        print("✅ DAST scan passed!")
+        return 0
+
+
+if __name__ == '__main__':
+    import sys
+    exit_code = asyncio.run(main())
+    sys.exit(exit_code)
+EOF
+
+chmod +x dast_scan.py

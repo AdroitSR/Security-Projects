@@ -1,0 +1,6 @@
+# SAST Tools for Security Testing
+bandit>=1.7.5              # Python security linter
+safety>=3.0.0              # Dependency vulnerability scanner
+pylint>=3.0.0              # Code quality with security
+detect-secrets>=1.4.0      # Detect hardcoded secrets
+pip-audit>=2.6.0           # Audit dependencies

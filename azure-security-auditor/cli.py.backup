@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""
+Azure Security Auditor - Command Line Interface
+
+Automated security compliance auditing for Microsoft Azure environments.
+"""
+import asyncio
+import argparse
+import logging
+import sys
+from pathlib import Path
+from typing import List
+
+# Add project to path
+sys.path.insert(0, str(Path(__file__).parent))
+
+from auditor.core.azure_client import AzureClient
+from auditor.core.engine import AuditEngine
+from auditor.reports.json_report import JSONReport
+
+# Import available controls
+from auditor.frameworks.cis_azure.storage_controls import (
+    CIS_Azure_3_1_SecureTransferRequired,
+)
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def parse_arguments():
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(
+        description='Azure Security Auditor - CIS Azure Benchmark Scanner',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run all controls
+  python cli.py
+
+  # Run with specific subscription
+  python cli.py --subscription-id abc-123-def-456
+
+  # Verbose output
+  python cli.py -v
+
+  # Custom output directory
+  python cli.py --output ./my-reports
+
+  # Exit with error if findings detected (for CI/CD)
+  python cli.py --fail-on-findings
+        """
+    )
+
+    # Azure Configuration
+    azure_group = parser.add_argument_group('Azure Configuration')
+    azure_group.add_argument(
+        '--subscription-id',
+        help='Azure subscription ID (uses default if not specified)'
+    )
+    azure_group.add_argument(
+        '--tenant-id',
+        help='Azure AD tenant ID (optional, uses environment variable)'
+    )
+    azure_group.add_argument(
+        '--client-id',
+        help='Service principal client ID (optional, uses environment variable)'
+    )
+    azure_group.add_argument(
+        '--client-secret',
+        help='Service principal secret (optional, uses environment variable)'
+    )
+
+    # Filtering
+    filter_group = parser.add_argument_group('Filtering')
+    filter_group.add_argument(
+        '--frameworks',
+        nargs='+',
+        choices=['CIS-Azure', 'SOC2', 'ISO27001', 'ALL'],
+        default=['ALL'],
+        help='Filter by compliance frameworks (default: ALL)'
+    )
+    filter_group.add_argument(
+        '--controls',
+        nargs='+',
+        help='Filter by specific control IDs (e.g., CIS-Azure-3.1)'
+    )
+    filter_group.add_argument(
+        '--services',
+        nargs='+',
+        choices=['storage', 'compute', 'network', 'keyvault', 'identity'],
+        help='Filter by Azure services'
+    )
+
+    # Output
+    output_group = parser.add_argument_group('Output')
+    output_group.add_argument(
+        '--output', '-o',
+        default='./reports',
+        help='Output directory for reports (default: ./reports)'
+    )
+    output_group.add_argument(
+        '--format',
+        nargs='+',
+        choices=['json', 'html', 'csv'],
+        default=['json'],
+        help='Report formats to generate (default: json)'
+    )
+
+    # Execution
+    exec_group = parser.add_argument_group('Execution')
+    exec_group.add_argument(
+        '--sequential',
+        action='store_true',
+        help='Run controls sequentially instead of parallel'
+    )
+    exec_group.add_argument(
+        '--workers',
+        type=int,
+        default=10,
+        help='Maximum parallel workers (default: 10)'
+    )
+    exec_group.add_argument(
+        '--fail-on-findings',
+        action='store_true',
+        help='Exit with code 1 if any findings are detected (for CI/CD)'
+    )
+
+    # Logging
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='Enable verbose logging'
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='Azure Security Auditor 1.0.0'
+    )
+
+    return parser.parse_args()
+
+
+def load_controls(args) -> List:
+    """
+    Load security controls based on filters.
+
+    Args:
+        args: Parsed command-line arguments
+
+    Returns:
+        List of control instances
+    """
+    all_controls = [
+        # CIS Azure Storage Controls
+        CIS_Azure_3_1_SecureTransferRequired(),
+
+        # Add more controls here as you implement them
+        # CIS_Azure_3_2_StorageEncryption(),
+        # CIS_Azure_3_3_PublicAccessDisabled(),
+        # CIS_Azure_6_1_RDPRestricted(),
+        # CIS_Azure_6_2_SSHRestricted(),
+    ]
+
+    # Filter by specific control IDs
+    if args.controls:
+        all_controls = [
+            c for c in all_controls
+            if c.control_id in args.controls
+        ]
+
+    # Filter by frameworks
+    if 'ALL' not in args.frameworks:
+        all_controls = [
+            c for c in all_controls
+            if c.framework in args.frameworks
+        ]
+
+    # Filter by services
+    if args.services:
+        all_controls = [
+            c for c in all_controls
+            if c.service in args.services
+        ]
+
+    return all_controls
+
+
+async def main():
+    """Main entry point."""
+    args = parse_arguments()
+
+    # Configure logging
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # Print header
+    print("=" * 60)
+    print("Azure Security Auditor")
+    print("=" * 60)
+    print()
+
+    try:
+        # Connect to Azure
+        print("🔗 Connecting to Azure...")
+
+        # Create Azure client with credentials from args or environment
+        client = AzureClient(
+            subscription_id=args.subscription_id,
+            tenant_id=args.tenant_id,
+            client_id=args.client_id,
+            client_secret=args.client_secret
+        )
+
+        print(f"✅ Connected to subscription: {client.subscription_id}")
+        if client.tenant_id:
+            print(f"   Tenant: {client.tenant_id}")
+        print()
+
+        # Load controls
+        controls = load_controls(args)
+
+        if not controls:
+            print("❌ No controls matched your filters!")
+            print()
+            print("Available controls:")
+            for c in load_controls(argparse.Namespace(
+                controls=None, frameworks=['ALL'], services=None
+            )):
+                print(f"  - {c.control_id}: {c.title}")
+            sys.exit(1)
+
+        print(f"📋 Loaded {len(controls)} security controls")
+        for control in controls:
+            print(f"   - {control.control_id}: {control.title}")
+        print()
+
+        # Run audit
+        print("🔍 Running security audit...")
+        engine = AuditEngine(
+            cloud_client=client,
+            controls=controls,
+            parallel=not args.sequential,
+            max_workers=args.workers
+        )
+
+        results = await engine.run_audit()
+
+        # Display summary
+        summary = results['summary']
+
+        print()
+        print("=" * 60)
+        print("AUDIT SUMMARY")
+        print("=" * 60)
+        print(f"Subscription:      {client.subscription_id}")
+        print(f"Total Findings:    {summary['total_findings']}")
+        print(f"Passed:           {summary['passed']}")
+        print(f"Failed:           {summary['failed']}")
+        print(f"Warnings:         {summary['warnings']}")
+        print(f"Errors:           {summary['errors']}")
+        print(f"Compliance Rate:  {summary['compliance_rate']:.2f}%")
+        print(f"Duration:         {summary['duration_seconds']:.2f}s")
+        print("=" * 60)
+
+        # Framework breakdown
+        if summary['frameworks']:
+            print()
+            print("FRAMEWORK BREAKDOWN:")
+            for framework, stats in summary['frameworks'].items():
+                rate = (stats['passed'] / stats['total'] * 100) if stats['total'] > 0 else 0
+                print(f"  {framework:15} - Total: {stats['total']:3} | "
+                      f"Passed: {stats['passed']:3} | "
+                      f"Failed: {stats['failed']:3} | "
+                      f"Rate: {rate:.1f}%")
+            print("=" * 60)
+
+        # Generate reports
+        output_dir = Path(args.output)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        print()
+        print("📄 Generating reports...")
+
+        if 'json' in args.format:
+            json_path = output_dir / 'azure_audit.json'
+            JSONReport(results).generate(str(json_path))
+            print(f"   ✅ JSON report: {json_path}")
+
+        # TODO: Add HTML and CSV report generators
+        if 'html' in args.format:
+            print(f"   ⚠️  HTML report not yet implemented")
+
+        if 'csv' in args.format:
+            print(f"   ⚠️  CSV report not yet implemented")
+
+        # Show failed findings
+        failed = [f for f in results['findings'] if f['status'] == 'FAIL']
+        if failed:
+            print()
+            print("❌ Failed Controls:")
+            for finding in failed[:10]:  # Show first 10
+                resource = finding.get('resource_id', 'N/A')
+                print(f"   - {finding['control_id']}: {resource}")
+
+            if len(failed) > 10:
+                print(f"   ... and {len(failed) - 10} more")
+
+        # Show critical findings
+        critical = [
+            f for f in results['findings']
+            if f['status'] == 'FAIL' and f['severity'] == 'CRITICAL'
+        ]
+        if critical:
+            print()
+            print("🚨 CRITICAL Findings:")
+            for finding in critical:
+                resource = finding.get('resource_id', 'N/A')
+                print(f"   - {finding['control_id']}: {resource}")
+                if finding.get('evidence'):
+                    for evidence in finding['evidence'][:2]:
+                        print(f"     • {evidence}")
+
+        print()
+        print("✅ Audit complete!")
+        print()
+
+        # Exit with error if requested and findings exist
+        if args.fail_on_findings and summary['failed'] > 0:
+            print("⚠️  Exiting with error code due to failed findings (--fail-on-findings)")
+            sys.exit(1)
+
+        sys.exit(0)
+
+    except KeyboardInterrupt:
+        print()
+        print("⚠️  Audit interrupted by user")
+        sys.exit(130)
+
+    except Exception as e:
+        logger.error(f"Error running audit: {e}", exc_info=args.verbose)
+        print()
+        print(f"❌ ERROR: {e}")
+        print()
+
+        if "AuthorizationFailed" in str(e):
+            print("💡 HINT: Your service principal needs 'Reader' role on the subscription.")
+            print("   Go to Azure Portal → Subscriptions → Access Control (IAM) → Add role assignment")
+        elif "Authentication failed" in str(e):
+            print("💡 HINT: Check your Azure credentials.")
+            print("   - Service Principal: Verify AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID")
+            print("   - Azure CLI: Run 'az login' first")
+        elif "Subscription" in str(e) and "not found" in str(e):
+            print("💡 HINT: Check your subscription ID.")
+            print("   Run 'az account list' to see available subscriptions")
+
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    asyncio.run(main())

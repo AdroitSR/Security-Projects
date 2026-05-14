@@ -1,0 +1,92 @@
+{
+  "summary": {
+    "total_findings": 3,
+    "passed": 3,
+    "failed": 0,
+    "warnings": 0,
+    "errors": 0,
+    "compliance_rate": 100.0,
+    "frameworks": {
+      "CIS-Azure": {
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    "duration_seconds": 4.427625,
+    "start_time": "2026-04-20T22:27:52.770309",
+    "end_time": "2026-04-20T22:27:57.197934"
+  },
+  "findings": [
+    {
+      "control_id": "CIS-Azure-3.1",
+      "control_title": "Ensure 'Secure transfer required' is set to 'Enabled'",
+      "framework": "CIS-Azure",
+      "status": "PASS",
+      "severity": "HIGH",
+      "resource_type": "Storage Account",
+      "resource_id": "securityaudittest",
+      "description": "Storage accounts should require secure transfer (HTTPS only)",
+      "rationale": "HTTPS encrypts data in transit and prevents man-in-the-middle attacks",
+      "remediation": "\n        Enable secure transfer:\n        1. Go to Azure Portal \u2192 Storage Accounts\n        2. Select storage account\n        3. Settings \u2192 Configuration\n        4. Set 'Secure transfer required' to 'Enabled'\n\n        Or use Azure CLI:\n        az storage account update \\\n          --name <storage-account-name> \\\n          --resource-group <resource-group> \\\n          --https-only true\n        ",
+      "evidence": [],
+      "details": {
+        "storage_account": "securityaudittest",
+        "resource_group": "security-audit-test",
+        "https_only": true
+      },
+      "references": [
+        "https://docs.microsoft.com/en-us/azure/storage/common/storage-require-secure-transfer",
+        "CIS Azure Foundations Benchmark v1.5.0"
+      ],
+      "timestamp": "2026-04-20T22:27:54.058410",
+      "service": "storage"
+    },
+    {
+      "control_id": "CIS-Azure-3.2",
+      "control_title": "Ensure storage encryption is enabled",
+      "framework": "CIS-Azure",
+      "status": "PASS",
+      "severity": "HIGH",
+      "resource_type": "Storage Account",
+      "resource_id": "securityaudittest",
+      "description": "Storage service encryption protects data at rest",
+      "rationale": "Encryption at rest protects data from unauthorized access",
+      "remediation": "\n        Storage encryption is enabled by default on all new storage accounts.\n        For existing accounts without encryption, create a new account and migrate data.\n        ",
+      "evidence": [],
+      "details": {
+        "storage_account": "securityaudittest",
+        "blob_encryption": true,
+        "file_encryption": true
+      },
+      "references": [
+        "CIS Azure Foundations Benchmark v1.5.0"
+      ],
+      "timestamp": "2026-04-20T22:27:54.723039",
+      "service": "storage"
+    },
+    {
+      "control_id": "CIS-Azure-3.3",
+      "control_title": "Ensure storage accounts disallow public access",
+      "framework": "CIS-Azure",
+      "status": "PASS",
+      "severity": "CRITICAL",
+      "resource_type": "Storage Account",
+      "resource_id": "securityaudittest",
+      "description": "Anonymous public read access should be disabled",
+      "rationale": "Public access can expose sensitive data to unauthorized users",
+      "remediation": "\n        Disable public access:\n        1. Azure Portal \u2192 Storage Account \u2192 Configuration\n        2. Set 'Allow Blob public access' to 'Disabled'\n\n        Or use Azure CLI:\n        az storage account update \\\n          --name <storage-account-name> \\\n          --resource-group <resource-group> \\\n          --allow-blob-public-access false\n        ",
+      "evidence": [],
+      "details": {
+        "storage_account": "securityaudittest",
+        "public_access_allowed": false
+      },
+      "references": [
+        "CIS Azure Foundations Benchmark v1.5.0"
+      ],
+      "timestamp": "2026-04-20T22:27:55.619530",
+      "service": "storage"
+    }
+  ],
+  "controls_executed": 4
+}

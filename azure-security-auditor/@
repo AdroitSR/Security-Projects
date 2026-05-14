@@ -1,0 +1,8 @@
+export OPENAI_API_KEY="LZp7o962jwkLxRakGeJj9y866aTb"
+export OPENAI_BASE_URL="https://api.portkey.ai/v1"
+export PATH="$HOME/.local/bin:$PATH"
+export AZURE_SUBSCRIPTION_ID="91a938c6-1dec-49b0-a1a9-af12d3061671"
+
+export AZURE_TENANT_ID="9668c5e3-1b5c-46c7-9d56-2456a591da54"
+export AZURE_CLIENT_ID="2757003b-b177-46c2-9e9a-5e90810f51f5"
+export AZURE_CLIENT_SECRET="2f606c56-9a38-40e9-9347-7dbe9ff127ef"
